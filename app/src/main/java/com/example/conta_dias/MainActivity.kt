@@ -2,29 +2,50 @@ package com.example.conta_dias
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.glance.appwidget.GlanceAppWidgetManager
+import androidx.glance.appwidget.state.getAppWidgetState
 import androidx.glance.appwidget.state.updateAppWidgetState
 import androidx.glance.state.PreferencesGlanceStateDefinition
 import androidx.lifecycle.lifecycleScope
 import com.example.conta_dias.ui.theme.ContaDiasTheme
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import org.json.JSONArray
+import org.json.JSONObject
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
+import java.time.temporal.ChronoUnit
+import java.util.UUID
+import kotlin.math.abs
+
+data class HistoryItem(
+    val id: String = UUID.randomUUID().toString(),
+    val startDate: Long,
+    val endDate: Long,
+    val count: Long
+)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -32,11 +53,18 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             ContaDiasTheme {
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    ConfigurationScreen(
-                        modifier = Modifier.padding(innerPadding),
-                        onUpdateWidget = { updateWidgets() }
-                    )
+                var currentScreen by remember { mutableStateOf("config") }
+                
+                if (currentScreen == "history") {
+                    HistoryScreen(onBack = { currentScreen = "config" })
+                } else {
+                    Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
+                        ConfigurationScreen(
+                            modifier = Modifier.padding(innerPadding),
+                            onUpdateWidget = { updateWidgets() },
+                            onOpenHistory = { currentScreen = "history" }
+                        )
+                    }
                 }
             }
         }
@@ -55,138 +83,165 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ConfigurationScreen(modifier: Modifier = Modifier, onUpdateWidget: () -> Unit) {
+fun ConfigurationScreen(
+    modifier: Modifier = Modifier, 
+    onUpdateWidget: () -> Unit,
+    onOpenHistory: () -> Unit
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     
+    // Normaliza para o início do dia local em UTC
+    val todayMillis = LocalDate.now().atStartOfDay().toInstant(ZoneOffset.UTC).toEpochMilli()
+
     var isPlural by remember { mutableStateOf(false) }
     var middleText by remember { mutableStateOf("Sem acidentes graves") }
     var useMonths by remember { mutableStateOf(false) }
-    var startDateMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    var startDateMillis by remember { mutableLongStateOf(todayMillis) }
+    var endDateMillis by remember { mutableStateOf<Long?>(null) }
     var record by remember { mutableLongStateOf(0L) }
 
-    var showDatePicker by remember { mutableStateOf(false) }
-    val datePickerState = rememberDatePickerState(initialSelectedDateMillis = startDateMillis)
+    var showStartDatePicker by remember { mutableStateOf(false) }
+    var showEndDatePicker by remember { mutableStateOf(false) }
+    
+    val startDatePickerState = rememberDatePickerState(initialSelectedDateMillis = startDateMillis)
+    val endDatePickerState = rememberDatePickerState(initialSelectedDateMillis = endDateMillis ?: todayMillis)
 
     LaunchedEffect(Unit) {
         val manager = GlanceAppWidgetManager(context)
         val ids = manager.getGlanceIds(CounterWidget::class.java)
         if (ids.isNotEmpty()) {
-            val state = PreferencesGlanceStateDefinition.getDataStore(context, ids.first().toString()).data.first()
+            val state = getAppWidgetState(context, PreferencesGlanceStateDefinition, ids.first())
             isPlural = state[CounterWidget.Keys.IS_PLURAL] ?: false
             middleText = state[CounterWidget.Keys.MIDDLE_TEXT] ?: "Sem acidentes graves"
             useMonths = state[CounterWidget.Keys.USE_MONTHS] ?: false
-            startDateMillis = state[CounterWidget.Keys.START_DATE] ?: System.currentTimeMillis()
+            startDateMillis = state[CounterWidget.Keys.START_DATE] ?: todayMillis
+            endDateMillis = state[CounterWidget.Keys.END_DATE]
             record = state[CounterWidget.Keys.RECORD] ?: 0L
-            datePickerState.selectedDateMillis = startDateMillis
+            
+            startDatePickerState.selectedDateMillis = startDateMillis
+            endDatePickerState.selectedDateMillis = endDateMillis ?: todayMillis
         }
     }
 
-    if (showDatePicker) {
+    if (showStartDatePicker) {
         DatePickerDialog(
-            onDismissRequest = { showDatePicker = false },
+            onDismissRequest = { showStartDatePicker = false },
             confirmButton = {
                 TextButton(onClick = {
-                    datePickerState.selectedDateMillis?.let {
-                        startDateMillis = it
-                    }
-                    showDatePicker = false
-                }) {
-                    Text("Confirmar")
-                }
+                    startDatePickerState.selectedDateMillis?.let { startDateMillis = it }
+                    showStartDatePicker = false
+                }) { Text("Confirmar") }
             },
             dismissButton = {
-                TextButton(onClick = { showDatePicker = false }) {
-                    Text("Cancelar")
-                }
+                TextButton(onClick = { showStartDatePicker = false }) { Text("Cancelar") }
             }
-        ) {
-            DatePicker(state = datePickerState)
-        }
+        ) { DatePicker(state = startDatePickerState) }
+    }
+
+    if (showEndDatePicker) {
+        DatePickerDialog(
+            onDismissRequest = { showEndDatePicker = false },
+            confirmButton = {
+                TextButton(onClick = {
+                    endDateMillis = endDatePickerState.selectedDateMillis
+                    showEndDatePicker = false
+                }) { Text("Confirmar") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showEndDatePicker = false }) { Text("Cancelar") }
+            }
+        ) { DatePicker(state = endDatePickerState) }
     }
 
     Column(
         modifier = modifier
             .fillMaxSize()
-            .padding(16.dp)
+            .padding(horizontal = 16.dp, vertical = 4.dp)
             .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        Text("Configuração do Widget", style = MaterialTheme.typography.headlineMedium)
+        Text("Configuração", style = MaterialTheme.typography.titleLarge)
 
-        Text("Modo de tratamento:")
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Text("Modo:", modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
             FilterChip(
-                selected = !isPlural,
-                onClick = { isPlural = false },
-                label = { Text("Estou (Eu)") }
+                selected = !isPlural, 
+                onClick = { isPlural = false }, 
+                label = { Text("Eu", style = MaterialTheme.typography.bodySmall) },
+                modifier = Modifier.height(32.dp)
             )
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(4.dp))
             FilterChip(
-                selected = isPlural,
-                onClick = { isPlural = true },
-                label = { Text("Estamos (Nós)") }
+                selected = isPlural, 
+                onClick = { isPlural = true }, 
+                label = { Text("Nós", style = MaterialTheme.typography.bodySmall) },
+                modifier = Modifier.height(32.dp)
             )
         }
 
         OutlinedTextField(
             value = middleText,
             onValueChange = { middleText = it },
-            label = { Text("Texto Central (Ex: Sem acidentes)") },
-            modifier = Modifier.fillMaxWidth()
+            label = { Text("Texto Central") },
+            modifier = Modifier.fillMaxWidth(),
+            textStyle = MaterialTheme.typography.bodyMedium
         )
 
-        Text("Unidade de tempo:")
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Text("Unidade:", modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
             FilterChip(
-                selected = !useMonths,
-                onClick = { useMonths = false },
-                label = { Text("Dias") }
+                selected = !useMonths, 
+                onClick = { useMonths = false }, 
+                label = { Text("Dias", style = MaterialTheme.typography.bodySmall) },
+                modifier = Modifier.height(32.dp)
             )
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(4.dp))
             FilterChip(
-                selected = useMonths,
-                onClick = { useMonths = true },
-                label = { Text("Meses") }
+                selected = useMonths, 
+                onClick = { useMonths = true }, 
+                label = { Text("Meses", style = MaterialTheme.typography.bodySmall) },
+                modifier = Modifier.height(32.dp)
             )
         }
 
-        Text("Data de Início:")
-        val dateDisplay = Instant.ofEpochMilli(startDateMillis).atZone(ZoneOffset.UTC).toLocalDate()
-            .format(DateTimeFormatter.ofPattern("dd/MM/yyyy"))
-        Text("Contando desde: $dateDisplay", style = MaterialTheme.typography.bodyLarge)
-        
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(
-                onClick = {
-                    startDateMillis = LocalDate.now().atStartOfDay().toInstant(ZoneOffset.UTC).toEpochMilli()
-                    datePickerState.selectedDateMillis = startDateMillis
-                },
-                modifier = Modifier.weight(1f)
-            ) {
-                Text("Hoje")
+        HorizontalDivider(modifier = Modifier.padding(vertical = 2.dp))
+
+        // Data de Início
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Início:", style = MaterialTheme.typography.labelLarge)
+                val startDisplay = Instant.ofEpochMilli(startDateMillis).atZone(ZoneOffset.UTC).toLocalDate().format(DateTimeFormatter.ofPattern("dd/MM/yyyy"))
+                Text(startDisplay, style = MaterialTheme.typography.bodySmall)
             }
-            Button(
-                onClick = { showDatePicker = true },
-                modifier = Modifier.weight(1f)
-            ) {
-                Text("Escolher Data")
-            }
+            TextButton(onClick = { startDateMillis = todayMillis; startDatePickerState.selectedDateMillis = todayMillis }, modifier = Modifier.height(36.dp)) { Text("Hoje", style = MaterialTheme.typography.bodySmall) }
+            TextButton(onClick = { showStartDatePicker = true }, modifier = Modifier.height(36.dp)) { Text("Mudar", style = MaterialTheme.typography.bodySmall) }
         }
 
-        HorizontalDivider()
-
-        Text("Record Atual: $record ${if (useMonths) "meses" else "dias"}")
-        
-        Button(
-            onClick = { record = 0L },
-            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text("Zerar Record")
+        // Data de Término
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Final:", style = MaterialTheme.typography.labelLarge)
+                val endDisplay = endDateMillis?.let { Instant.ofEpochMilli(it).atZone(ZoneOffset.UTC).toLocalDate().format(DateTimeFormatter.ofPattern("dd/MM/yyyy")) } ?: "Hoje"
+                Text(endDisplay, style = MaterialTheme.typography.bodySmall)
+            }
+            TextButton(onClick = { endDateMillis = null }, modifier = Modifier.height(36.dp)) { Text("Limpar", style = MaterialTheme.typography.bodySmall) }
+            TextButton(onClick = { showEndDatePicker = true }, modifier = Modifier.height(36.dp)) { Text("Definir", style = MaterialTheme.typography.bodySmall) }
         }
 
-        Spacer(Modifier.height(24.dp))
+        HorizontalDivider(modifier = Modifier.padding(vertical = 2.dp))
+
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Text("Record: $record", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+            TextButton(
+                onClick = { record = 0L },
+                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                modifier = Modifier.height(36.dp)
+            ) { Text("Zerar", style = MaterialTheme.typography.bodySmall) }
+            TextButton(onClick = onOpenHistory, modifier = Modifier.height(36.dp)) { Text("Histórico", style = MaterialTheme.typography.bodySmall) }
+        }
+
+        Spacer(Modifier.height(4.dp))
 
         Button(
             onClick = {
@@ -200,6 +255,7 @@ fun ConfigurationScreen(modifier: Modifier = Modifier, onUpdateWidget: () -> Uni
                                 this[CounterWidget.Keys.MIDDLE_TEXT] = middleText
                                 this[CounterWidget.Keys.USE_MONTHS] = useMonths
                                 this[CounterWidget.Keys.START_DATE] = startDateMillis
+                                if (endDateMillis != null) this[CounterWidget.Keys.END_DATE] = endDateMillis!! else remove(CounterWidget.Keys.END_DATE)
                                 this[CounterWidget.Keys.RECORD] = record
                             }
                         }
@@ -207,10 +263,203 @@ fun ConfigurationScreen(modifier: Modifier = Modifier, onUpdateWidget: () -> Uni
                     onUpdateWidget()
                 }
             },
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().height(48.dp),
             shape = MaterialTheme.shapes.medium
-        ) {
-            Text("Salvar e Atualizar Widget")
+        ) { Text("Salvar e Atualizar Widget") }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun HistoryScreen(onBack: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var historyItems by remember { mutableStateOf(listOf<HistoryItem>()) }
+    var isLoading by remember { mutableStateOf(true) }
+    var useMonths by remember { mutableStateOf(false) }
+
+    var editingItem by remember { mutableStateOf<HistoryItem?>(null) }
+    var showEditDialog by remember { mutableStateOf(false) }
+
+    BackHandler { onBack() }
+
+    LaunchedEffect(Unit) {
+        val manager = GlanceAppWidgetManager(context)
+        val ids = manager.getGlanceIds(CounterWidget::class.java)
+        if (ids.isNotEmpty()) {
+            val state = getAppWidgetState(context, PreferencesGlanceStateDefinition, ids.first())
+            val json = state[CounterWidget.Keys.HISTORY_JSON] ?: "[]"
+            useMonths = state[CounterWidget.Keys.USE_MONTHS] ?: false
+            val list = mutableListOf<HistoryItem>()
+            val array = JSONArray(json)
+            for (i in 0 until array.length()) {
+                val obj = array.getJSONObject(i)
+                list.add(HistoryItem(
+                    obj.getString("id"),
+                    obj.getLong("start"),
+                    obj.getLong("end"),
+                    obj.getLong("count")
+                ))
+            }
+            historyItems = list
+        }
+        isLoading = false
+    }
+
+    fun saveHistory(newList: List<HistoryItem>) {
+        scope.launch {
+            val manager = GlanceAppWidgetManager(context)
+            val ids = manager.getGlanceIds(CounterWidget::class.java)
+            val jsonArray = JSONArray()
+            newList.forEach { item ->
+                jsonArray.put(JSONObject().apply {
+                    put("id", item.id)
+                    put("start", item.startDate)
+                    put("end", item.endDate)
+                    put("count", item.count)
+                })
+            }
+            val jsonString = jsonArray.toString()
+            
+            val maxHistory = if (newList.isEmpty()) 0L else newList.maxOf { it.count }
+
+            ids.forEach { id ->
+                updateAppWidgetState(context, PreferencesGlanceStateDefinition, id) { prefs ->
+                    prefs.toMutablePreferences().apply {
+                        this[CounterWidget.Keys.HISTORY_JSON] = jsonString
+                        val currentRecord = this[CounterWidget.Keys.RECORD] ?: 0L
+                        if (maxHistory > currentRecord) {
+                            this[CounterWidget.Keys.RECORD] = maxHistory
+                        }
+                    }
+                }
+                CounterWidget().update(context, id)
+            }
+            historyItems = newList
         }
     }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Histórico", style = MaterialTheme.typography.titleMedium) },
+                navigationIcon = {
+                    TextButton(onClick = onBack) { Text("Voltar") }
+                },
+                actions = {
+                    IconButton(onClick = {
+                        val normalizedNow = LocalDate.now().atStartOfDay().toInstant(ZoneOffset.UTC).toEpochMilli()
+                        editingItem = HistoryItem(startDate = normalizedNow, endDate = normalizedNow, count = 0L)
+                        showEditDialog = true
+                    }) { Icon(Icons.Default.Edit, "Add") }
+                }
+            )
+        }
+    ) { padding ->
+        if (isLoading) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+        } else {
+            LazyColumn(modifier = Modifier.padding(padding).fillMaxSize().padding(horizontal = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                items(historyItems) { item ->
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Row(modifier = Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                val fmt = DateTimeFormatter.ofPattern("dd/MM/yyyy")
+                                val s = Instant.ofEpochMilli(item.startDate).atZone(ZoneOffset.UTC).toLocalDate().format(fmt)
+                                val e = Instant.ofEpochMilli(item.endDate).atZone(ZoneOffset.UTC).toLocalDate().format(fmt)
+                                Text("$s - $e", style = MaterialTheme.typography.bodySmall)
+                                Text("${item.count} ${if (useMonths) "meses" else "dias"}", style = MaterialTheme.typography.titleSmall)
+                            }
+                            IconButton(onClick = { editingItem = item; showEditDialog = true }) { Icon(Icons.Default.Edit, "Editar", modifier = Modifier.size(20.dp)) }
+                            IconButton(onClick = { saveHistory(historyItems.filter { it.id != item.id }) }) { Icon(Icons.Default.Delete, "Deletar", tint = Color.Red, modifier = Modifier.size(20.dp)) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showEditDialog && editingItem != null) {
+        EditHistoryDialog(
+            item = editingItem!!,
+            useMonths = useMonths,
+            onDismiss = { showEditDialog = false },
+            onConfirm = { updatedItem ->
+                val exists = historyItems.any { it.id == updatedItem.id }
+                val newList = if (exists) {
+                    historyItems.map { if (it.id == updatedItem.id) updatedItem else it }
+                } else {
+                    historyItems + updatedItem
+                }
+                saveHistory(newList)
+                showEditDialog = false
+            }
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun EditHistoryDialog(item: HistoryItem, useMonths: Boolean, onDismiss: () -> Unit, onConfirm: (HistoryItem) -> Unit) {
+    var startDate by remember { mutableLongStateOf(item.startDate) }
+    var endDate by remember { mutableLongStateOf(item.endDate) }
+    
+    var showStartPicker by remember { mutableStateOf(false) }
+    var showEndPicker by remember { mutableStateOf(false) }
+
+    if (showStartPicker) {
+        val state = rememberDatePickerState(initialSelectedDateMillis = startDate)
+        DatePickerDialog(onDismissRequest = { showStartPicker = false }, confirmButton = { TextButton(onClick = { state.selectedDateMillis?.let { startDate = it }; showStartPicker = false }) { Text("OK") } }) { DatePicker(state = state) }
+    }
+    if (showEndPicker) {
+        val state = rememberDatePickerState(initialSelectedDateMillis = endDate)
+        DatePickerDialog(onDismissRequest = { showEndPicker = false }, confirmButton = { TextButton(onClick = { state.selectedDateMillis?.let { endDate = it }; showEndPicker = false }) { Text("OK") } }) { DatePicker(state = state) }
+    }
+
+    val calculatedCount = remember(startDate, endDate, useMonths) {
+        val s = Instant.ofEpochMilli(startDate).atZone(ZoneOffset.UTC).toLocalDate()
+        val e = Instant.ofEpochMilli(endDate).atZone(ZoneOffset.UTC).toLocalDate()
+        if (useMonths) {
+            ChronoUnit.MONTHS.between(s, e)
+        } else {
+            ChronoUnit.DAYS.between(s, e)
+        }
+    }.let { abs(it) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Editar Intervalo") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                val fmt = DateTimeFormatter.ofPattern("dd/MM/yyyy")
+                Column {
+                    Text("Início", style = MaterialTheme.typography.labelMedium)
+                    OutlinedButton(onClick = { showStartPicker = true }, modifier = Modifier.fillMaxWidth()) {
+                        Text(Instant.ofEpochMilli(startDate).atZone(ZoneOffset.UTC).toLocalDate().format(fmt))
+                    }
+                }
+                Column {
+                    Text("Fim", style = MaterialTheme.typography.labelMedium)
+                    OutlinedButton(onClick = { showEndPicker = true }, modifier = Modifier.fillMaxWidth()) {
+                        Text(Instant.ofEpochMilli(endDate).atZone(ZoneOffset.UTC).toLocalDate().format(fmt))
+                    }
+                }
+                
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Contagem calculada:", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        text = "$calculatedCount ${if (useMonths) "meses" else "dias"}",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = { onConfirm(item.copy(startDate = startDate, endDate = endDate, count = calculatedCount)) }) { Text("Salvar") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } }
+    )
 }

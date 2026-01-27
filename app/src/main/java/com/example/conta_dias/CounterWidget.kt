@@ -29,7 +29,7 @@ import androidx.glance.currentState
 import androidx.glance.unit.ColorProvider
 import java.time.Instant
 import java.time.LocalDate
-import java.time.ZoneId
+import java.time.ZoneOffset
 import java.time.temporal.ChronoUnit
 import kotlin.math.abs
 
@@ -41,23 +41,28 @@ class CounterWidget : GlanceAppWidget() {
         provideContent {
             val prefs = currentState<Preferences>()
             val startDateMillis = prefs[Keys.START_DATE] ?: System.currentTimeMillis()
+            val endDateMillis = prefs[Keys.END_DATE]
             val record = prefs[Keys.RECORD] ?: 0L
             val isPlural = prefs[Keys.IS_PLURAL] ?: false
             val middleText = prefs[Keys.MIDDLE_TEXT] ?: "Sem acidentes graves"
             val useMonths = prefs[Keys.USE_MONTHS] ?: false
 
-            val startDate = Instant.ofEpochMilli(startDateMillis).atZone(ZoneId.systemDefault()).toLocalDate()
+            // Usamos UTC para converter os millis do Picker para a data correta
+            val startDate = Instant.ofEpochMilli(startDateMillis).atZone(ZoneOffset.UTC).toLocalDate()
             val today = LocalDate.now()
             
+            val targetDate = endDateMillis?.let { 
+                Instant.ofEpochMilli(it).atZone(ZoneOffset.UTC).toLocalDate()
+            } ?: today
+            
             val rawDiff = if (useMonths) {
-                ChronoUnit.MONTHS.between(startDate, today)
+                ChronoUnit.MONTHS.between(startDate, targetDate)
             } else {
-                ChronoUnit.DAYS.between(startDate, today)
+                ChronoUnit.DAYS.between(startDate, targetDate)
             }
             
             val diff = abs(rawDiff)
 
-            // Update record if current diff is higher
             val currentRecord = if (diff > record) diff else record
 
             WidgetContent(
@@ -93,7 +98,6 @@ class CounterWidget : GlanceAppWidget() {
         val prefix1 = if (isPlural) "Estamos há" else "Estou há"
         val prefix3 = if (isPlural) "Nosso record é" else "Meu record é"
 
-        // Amarelo claro e Vermelho
         val lightYellow = Color(0xFFFFFFE0)
         val redColor = Color(0xFFFF0000)
 
@@ -135,10 +139,12 @@ class CounterWidget : GlanceAppWidget() {
 
     object Keys {
         val START_DATE = longPreferencesKey("start_date")
+        val END_DATE = longPreferencesKey("end_date")
         val RECORD = longPreferencesKey("record")
         val IS_PLURAL = booleanPreferencesKey("is_plural")
         val MIDDLE_TEXT = stringPreferencesKey("middle_text")
         val USE_MONTHS = booleanPreferencesKey("use_months")
+        val HISTORY_JSON = stringPreferencesKey("history_json")
     }
 }
 

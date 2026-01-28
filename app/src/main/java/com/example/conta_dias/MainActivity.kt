@@ -5,7 +5,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -21,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.glance.appwidget.GlanceAppWidgetManager
 import androidx.glance.appwidget.state.getAppWidgetState
 import androidx.glance.appwidget.state.updateAppWidgetState
@@ -33,7 +33,6 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.time.Instant
 import java.time.LocalDate
-import java.time.ZoneId
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
@@ -91,7 +90,6 @@ fun ConfigurationScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     
-    // Normaliza para o início do dia local em UTC
     val todayMillis = LocalDate.now().atStartOfDay().toInstant(ZoneOffset.UTC).toEpochMilli()
 
     var isPlural by remember { mutableStateOf(false) }
@@ -117,7 +115,13 @@ fun ConfigurationScreen(
             useMonths = state[CounterWidget.Keys.USE_MONTHS] ?: false
             startDateMillis = state[CounterWidget.Keys.START_DATE] ?: todayMillis
             endDateMillis = state[CounterWidget.Keys.END_DATE]
-            record = state[CounterWidget.Keys.RECORD] ?: 0L
+            val savedRecord = state[CounterWidget.Keys.RECORD] ?: 0L
+            
+            // Calcula se a contagem atual supera o recorde salvo para exibição
+            val s = Instant.ofEpochMilli(startDateMillis).atZone(ZoneOffset.UTC).toLocalDate()
+            val today = LocalDate.now()
+            val liveDiff = abs(if (useMonths) ChronoUnit.MONTHS.between(s, today) else ChronoUnit.DAYS.between(s, today))
+            record = if (liveDiff > savedRecord && endDateMillis == null) liveDiff else savedRecord
             
             startDatePickerState.selectedDateMillis = startDateMillis
             endDatePickerState.selectedDateMillis = endDateMillis ?: todayMillis
@@ -157,12 +161,94 @@ fun ConfigurationScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .padding(horizontal = 16.dp, vertical = 4.dp)
+            .padding(horizontal = 16.dp, vertical = 8.dp)
             .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Configuração", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+        Text("Configuração", style = MaterialTheme.typography.headlineMedium)
+
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Text("Modo:", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
+            FilterChip(
+                selected = !isPlural, 
+                onClick = { isPlural = false }, 
+                label = { Text("Eu", style = MaterialTheme.typography.bodyLarge) },
+                modifier = Modifier.height(48.dp)
+            )
+            Spacer(Modifier.width(8.dp))
+            FilterChip(
+                selected = isPlural, 
+                onClick = { isPlural = true }, 
+                label = { Text("Nós", style = MaterialTheme.typography.bodyLarge) },
+                modifier = Modifier.height(48.dp)
+            )
+        }
+
+        OutlinedTextField(
+            value = middleText,
+            onValueChange = { middleText = it },
+            label = { Text("Texto Central") },
+            modifier = Modifier.fillMaxWidth(),
+            textStyle = MaterialTheme.typography.titleLarge
+        )
+
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Text("Unidade:", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
+            FilterChip(
+                selected = !useMonths, 
+                onClick = { useMonths = false }, 
+                label = { Text("Dias", style = MaterialTheme.typography.bodyLarge) },
+                modifier = Modifier.height(48.dp)
+            )
+            Spacer(Modifier.width(8.dp))
+            FilterChip(
+                selected = useMonths, 
+                onClick = { useMonths = true }, 
+                label = { Text("Meses", style = MaterialTheme.typography.bodyLarge) },
+                modifier = Modifier.height(48.dp)
+            )
+        }
+
+        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Início:", style = MaterialTheme.typography.titleLarge)
+                val startDisplay = Instant.ofEpochMilli(startDateMillis).atZone(ZoneOffset.UTC).toLocalDate().format(DateTimeFormatter.ofPattern("dd/MM/yyyy"))
+                Text(startDisplay, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.primary)
+            }
+            Button(onClick = { startDateMillis = todayMillis; startDatePickerState.selectedDateMillis = todayMillis }, modifier = Modifier.height(48.dp)) { Text("Hoje") }
+            Spacer(Modifier.width(8.dp))
+            Button(onClick = { showStartDatePicker = true }, modifier = Modifier.height(48.dp)) { Text("Mudar") }
+        }
+
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Final:", style = MaterialTheme.typography.titleLarge)
+                val endDisplay = endDateMillis?.let { Instant.ofEpochMilli(it).atZone(ZoneOffset.UTC).toLocalDate().format(DateTimeFormatter.ofPattern("dd/MM/yyyy")) } ?: "Hoje"
+                Text(endDisplay, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.primary)
+            }
+            Button(onClick = { endDateMillis = null }, modifier = Modifier.height(48.dp)) { Text("Limpar") }
+            Spacer(Modifier.width(8.dp))
+            Button(onClick = { showEndDatePicker = true }, modifier = Modifier.height(48.dp)) { Text("Definir") }
+        }
+
+        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Text("Record: $record", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+            Button(
+                onClick = { record = 0L },
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                modifier = Modifier.height(48.dp)
+            ) { Text("Zerar") }
+            Spacer(Modifier.width(8.dp))
+            Button(onClick = onOpenHistory, modifier = Modifier.height(48.dp)) { Text("Histórico") }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
                 onClick = {
                     scope.launch {
@@ -201,115 +287,35 @@ fun ConfigurationScreen(
                         onUpdateWidget()
                     }
                 },
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-                modifier = Modifier.height(32.dp)
-            ) { Text("Novo", style = MaterialTheme.typography.labelMedium) }
-        }
+                modifier = Modifier.weight(1f).height(56.dp),
+                shape = MaterialTheme.shapes.medium,
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary)
+            ) { Text("Novo", fontSize = 18.sp) }
 
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-            Text("Modo:", modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-            FilterChip(
-                selected = !isPlural, 
-                onClick = { isPlural = false }, 
-                label = { Text("Eu", style = MaterialTheme.typography.bodySmall) },
-                modifier = Modifier.height(32.dp)
-            )
-            Spacer(Modifier.width(4.dp))
-            FilterChip(
-                selected = isPlural, 
-                onClick = { isPlural = true }, 
-                label = { Text("Nós", style = MaterialTheme.typography.bodySmall) },
-                modifier = Modifier.height(32.dp)
-            )
-        }
-
-        OutlinedTextField(
-            value = middleText,
-            onValueChange = { middleText = it },
-            label = { Text("Texto Central") },
-            modifier = Modifier.fillMaxWidth(),
-            textStyle = MaterialTheme.typography.bodyMedium
-        )
-
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-            Text("Unidade:", modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-            FilterChip(
-                selected = !useMonths, 
-                onClick = { useMonths = false }, 
-                label = { Text("Dias", style = MaterialTheme.typography.bodySmall) },
-                modifier = Modifier.height(32.dp)
-            )
-            Spacer(Modifier.width(4.dp))
-            FilterChip(
-                selected = useMonths, 
-                onClick = { useMonths = true }, 
-                label = { Text("Meses", style = MaterialTheme.typography.bodySmall) },
-                modifier = Modifier.height(32.dp)
-            )
-        }
-
-        HorizontalDivider(modifier = Modifier.padding(vertical = 2.dp))
-
-        // Data de Início
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text("Início:", style = MaterialTheme.typography.labelLarge)
-                val startDisplay = Instant.ofEpochMilli(startDateMillis).atZone(ZoneOffset.UTC).toLocalDate().format(DateTimeFormatter.ofPattern("dd/MM/yyyy"))
-                Text(startDisplay, style = MaterialTheme.typography.bodySmall)
-            }
-            TextButton(onClick = { startDateMillis = todayMillis; startDatePickerState.selectedDateMillis = todayMillis }, modifier = Modifier.height(36.dp)) { Text("Hoje", style = MaterialTheme.typography.bodySmall) }
-            TextButton(onClick = { showStartDatePicker = true }, modifier = Modifier.height(36.dp)) { Text("Mudar", style = MaterialTheme.typography.bodySmall) }
-        }
-
-        // Data de Término
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text("Final:", style = MaterialTheme.typography.labelLarge)
-                val endDisplay = endDateMillis?.let { Instant.ofEpochMilli(it).atZone(ZoneOffset.UTC).toLocalDate().format(DateTimeFormatter.ofPattern("dd/MM/yyyy")) } ?: "Hoje"
-                Text(endDisplay, style = MaterialTheme.typography.bodySmall)
-            }
-            TextButton(onClick = { endDateMillis = null }, modifier = Modifier.height(36.dp)) { Text("Limpar", style = MaterialTheme.typography.bodySmall) }
-            TextButton(onClick = { showEndDatePicker = true }, modifier = Modifier.height(36.dp)) { Text("Definir", style = MaterialTheme.typography.bodySmall) }
-        }
-
-        HorizontalDivider(modifier = Modifier.padding(vertical = 2.dp))
-
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-            Text("Record: $record", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-            TextButton(
-                onClick = { record = 0L },
-                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
-                modifier = Modifier.height(36.dp)
-            ) { Text("Zerar", style = MaterialTheme.typography.bodySmall) }
-            TextButton(onClick = onOpenHistory, modifier = Modifier.height(36.dp)) { Text("Histórico", style = MaterialTheme.typography.bodySmall) }
-        }
-
-        Spacer(Modifier.height(4.dp))
-
-        Button(
-            onClick = {
-                scope.launch {
-                    val manager = GlanceAppWidgetManager(context)
-                    val ids = manager.getGlanceIds(CounterWidget::class.java)
-                    ids.forEach { id ->
-                        updateAppWidgetState(context, PreferencesGlanceStateDefinition, id) { prefs ->
-                            prefs.toMutablePreferences().apply {
-                                this[CounterWidget.Keys.IS_PLURAL] = isPlural
-                                this[CounterWidget.Keys.MIDDLE_TEXT] = middleText
-                                this[CounterWidget.Keys.USE_MONTHS] = useMonths
-                                this[CounterWidget.Keys.START_DATE] = startDateMillis
-                                if (endDateMillis != null) this[CounterWidget.Keys.END_DATE] = endDateMillis!! else remove(CounterWidget.Keys.END_DATE)
-                                this[CounterWidget.Keys.RECORD] = record
+            Button(
+                onClick = {
+                    scope.launch {
+                        val manager = GlanceAppWidgetManager(context)
+                        val ids = manager.getGlanceIds(CounterWidget::class.java)
+                        ids.forEach { id ->
+                            updateAppWidgetState(context, PreferencesGlanceStateDefinition, id) { prefs ->
+                                prefs.toMutablePreferences().apply {
+                                    this[CounterWidget.Keys.IS_PLURAL] = isPlural
+                                    this[CounterWidget.Keys.MIDDLE_TEXT] = middleText
+                                    this[CounterWidget.Keys.USE_MONTHS] = useMonths
+                                    this[CounterWidget.Keys.START_DATE] = startDateMillis
+                                    if (endDateMillis != null) this[CounterWidget.Keys.END_DATE] = endDateMillis!! else remove(CounterWidget.Keys.END_DATE)
+                                    this[CounterWidget.Keys.RECORD] = record
+                                }
                             }
                         }
+                        onUpdateWidget()
                     }
-                    onUpdateWidget()
-                }
-            },
-            modifier = Modifier.fillMaxWidth().height(48.dp),
-            shape = MaterialTheme.shapes.medium
-        ) { Text("Salvar e Atualizar Widget") }
+                },
+                modifier = Modifier.weight(1f).height(56.dp),
+                shape = MaterialTheme.shapes.medium
+            ) { Text("Salvar", fontSize = 18.sp) }
+        }
     }
 }
 

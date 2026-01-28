@@ -161,7 +161,51 @@ fun ConfigurationScreen(
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        Text("Configuração", style = MaterialTheme.typography.titleLarge)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Configuração", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+            Button(
+                onClick = {
+                    scope.launch {
+                        val manager = GlanceAppWidgetManager(context)
+                        val ids = manager.getGlanceIds(CounterWidget::class.java)
+                        
+                        val s = Instant.ofEpochMilli(startDateMillis).atZone(ZoneOffset.UTC).toLocalDate()
+                        val today = LocalDate.now()
+                        val diff = if (useMonths) ChronoUnit.MONTHS.between(s, today) else ChronoUnit.DAYS.between(s, today)
+                        val finalCount = abs(diff)
+
+                        ids.forEach { id ->
+                            updateAppWidgetState(context, PreferencesGlanceStateDefinition, id) { prefs ->
+                                val currentHistoryJson = prefs[CounterWidget.Keys.HISTORY_JSON] ?: "[]"
+                                val historyArray = JSONArray(currentHistoryJson)
+                                historyArray.put(JSONObject().apply {
+                                    put("id", UUID.randomUUID().toString())
+                                    put("start", startDateMillis)
+                                    put("end", todayMillis)
+                                    put("count", finalCount)
+                                })
+                                
+                                val newRecord = if (finalCount > record) finalCount else record
+                                
+                                prefs.toMutablePreferences().apply {
+                                    this[CounterWidget.Keys.START_DATE] = todayMillis
+                                    this[CounterWidget.Keys.RECORD] = newRecord
+                                    this[CounterWidget.Keys.HISTORY_JSON] = historyArray.toString()
+                                    remove(CounterWidget.Keys.END_DATE)
+                                }
+                            }
+                        }
+                        startDateMillis = todayMillis
+                        endDateMillis = null
+                        record = if (finalCount > record) finalCount else record
+                        onUpdateWidget()
+                    }
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                modifier = Modifier.height(32.dp)
+            ) { Text("Novo", style = MaterialTheme.typography.labelMedium) }
+        }
 
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
             Text("Modo:", modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)

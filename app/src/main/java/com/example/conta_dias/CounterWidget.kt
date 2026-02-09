@@ -7,7 +7,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
-import androidx.glance.GlanceTheme
 import androidx.glance.appwidget.GlanceAppWidget
 import androidx.glance.appwidget.GlanceAppWidgetReceiver
 import androidx.glance.appwidget.provideContent
@@ -27,6 +26,7 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.glance.currentState
 import androidx.glance.unit.ColorProvider
+import org.json.JSONArray
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
@@ -46,13 +46,14 @@ class CounterWidget : GlanceAppWidget() {
             val isPlural = prefs[Keys.IS_PLURAL] ?: false
             val middleText = prefs[Keys.MIDDLE_TEXT] ?: "Sem acidentes graves"
             val useMonths = prefs[Keys.USE_MONTHS] ?: false
+            val historyJson = prefs[Keys.HISTORY_JSON] ?: "[]"
 
             // Usamos UTC para converter os millis do Picker para a data correta
             val startDate = Instant.ofEpochMilli(startDateMillis).atZone(ZoneOffset.UTC).toLocalDate()
             val today = LocalDate.now()
             
             val targetDate = endDateMillis?.let { 
-                Instant.ofEpochMilli(it).atZone(ZoneOffset.UTC).toLocalDate()
+                Instant.ofEpochMilli(it).atZone(ZoneOffset.UTC).toLocalDate() 
             } ?: today
             
             val rawDiff = if (useMonths) {
@@ -62,14 +63,29 @@ class CounterWidget : GlanceAppWidget() {
             }
             
             val diff = abs(rawDiff)
-
             val currentRecord = if (diff > record) diff else record
+
+            // Cálculo da média do histórico
+            var average = 0L
+            try {
+                val array = JSONArray(historyJson)
+                if (array.length() > 0) {
+                    var sum = 0L
+                    for (i in 0 until array.length()) {
+                        sum += array.getJSONObject(i).getLong("count")
+                    }
+                    average = sum / array.length()
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
 
             WidgetContent(
                 isPlural = isPlural,
                 count = diff,
                 middleText = middleText,
                 record = currentRecord,
+                average = average,
                 useMonths = useMonths
             )
         }
@@ -81,22 +97,16 @@ class CounterWidget : GlanceAppWidget() {
         count: Long,
         middleText: String,
         record: Long,
+        average: Long,
         useMonths: Boolean
     ) {
-        val unit = if (useMonths) {
-            if (count == 1L) "mês" else "meses"
-        } else {
-            if (count == 1L) "dia" else "dias"
-        }
-        
-        val recordUnit = if (useMonths) {
-            if (record == 1L) "mês" else "meses"
-        } else {
-            if (record == 1L) "dia" else "dias"
-        }
+        val unit = if (useMonths) (if (count == 1L) "mês" else "meses") else (if (count == 1L) "dia" else "dias")
+        val recordUnit = if (useMonths) (if (record == 1L) "mês" else "meses") else (if (record == 1L) "dia" else "dias")
+        val averageUnit = if (useMonths) (if (average == 1L) "mês" else "meses") else (if (average == 1L) "dia" else "dias")
 
         val prefix1 = if (isPlural) "Estamos há" else "Estou há"
         val prefix3 = if (isPlural) "Nosso record é" else "Meu record é"
+        val prefix4 = if (isPlural) "Nossa média é" else "Minha média é"
 
         val lightYellow = Color(0xFFFFFFE0)
         val redColor = Color(0xFFFF0000)
@@ -129,11 +139,21 @@ class CounterWidget : GlanceAppWidget() {
             Text(
                 text = "$prefix3 $record $recordUnit",
                 style = TextStyle(
-                    fontSize = 14.sp,
+                    fontSize = 13.sp,
                     fontWeight = FontWeight.Bold,
                     color = ColorProvider(Color.Black)
                 )
             )
+            if (average > 0) {
+                Text(
+                    text = "$prefix4 $average $averageUnit",
+                    style = TextStyle(
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = ColorProvider(Color.DarkGray)
+                    )
+                )
+            }
         }
     }
 

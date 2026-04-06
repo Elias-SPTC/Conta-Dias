@@ -1,10 +1,14 @@
 package com.example.conta_dias
 
 import android.os.Bundle
+import android.content.Intent
+import android.net.Uri
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -27,10 +31,14 @@ import androidx.glance.appwidget.state.updateAppWidgetState
 import androidx.glance.state.PreferencesGlanceStateDefinition
 import androidx.lifecycle.lifecycleScope
 import com.example.conta_dias.ui.theme.ContaDiasTheme
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.BufferedReader
+import java.io.InputStreamReader
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
@@ -244,6 +252,102 @@ fun ConfigurationScreen(
             ) { Text("Zerar") }
             Spacer(Modifier.width(8.dp))
             Button(onClick = onOpenHistory, modifier = Modifier.height(48.dp)) { Text("Histórico") }
+        }
+
+        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+        Text("Backup", style = MaterialTheme.typography.titleLarge)
+        
+        val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+            uri?.let {
+                scope.launch {
+                    val backup = JSONObject().apply {
+                        put("isPlural", isPlural)
+                        put("middleText", middleText)
+                        put("useMonths", useMonths)
+                        put("startDate", startDateMillis)
+                        put("endDate", endDateMillis ?: JSONObject.NULL)
+                        put("record", record)
+                        
+                        // Pegar o histórico atual do GlanceState
+                        val manager = GlanceAppWidgetManager(context)
+                        val ids = manager.getGlanceIds(CounterWidget::class.java)
+                        if (ids.isNotEmpty()) {
+                            val state = getAppWidgetState(context, PreferencesGlanceStateDefinition, ids.first())
+                            val historyJson = state[CounterWidget.Keys.HISTORY_JSON] ?: "[]"
+                            put("history", JSONArray(historyJson))
+                        }
+                    }
+                    
+                    withContext(Dispatchers.IO) {
+                        context.contentResolver.openOutputStream(it)?.use { stream ->
+                            stream.write(backup.toString(4).toByteArray())
+                        }
+                    }
+                }
+            }
+        }
+
+        val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+            uri?.let {
+                scope.launch {
+                    val content = withContext(Dispatchers.IO) {
+                        context.contentResolver.openInputStream(it)?.use { stream ->
+                            BufferedReader(InputStreamReader(stream)).readText()
+                        }
+                    }
+                    
+                    content?.let { jsonStr ->
+                        try {
+                            val json = JSONObject(jsonStr)
+                            isPlural = json.optBoolean("isPlural", false)
+                            middleText = json.optString("middleText", "Sem acidentes graves")
+                            useMonths = json.optBoolean("useMonths", false)
+                            startDateMillis = json.optLong("startDate", todayMillis)
+                            endDateMillis = if (json.isNull("endDate")) null else json.optLong("endDate")
+                            record = json.optLong("record", 0L)
+                            
+                            val historyArray = json.optJSONArray("history") ?: JSONArray()
+                            
+                            // Atualizar widgets
+                            val manager = GlanceAppWidgetManager(context)
+                            val ids = manager.getGlanceIds(CounterWidget::class.java)
+                            ids.forEach { id ->
+                                updateAppWidgetState(context, PreferencesGlanceStateDefinition, id) { prefs ->
+                                    prefs.toMutablePreferences().apply {
+                                        this[CounterWidget.Keys.IS_PLURAL] = isPlural
+                                        this[CounterWidget.Keys.MIDDLE_TEXT] = middleText
+                                        this[CounterWidget.Keys.USE_MONTHS] = useMonths
+                                        this[CounterWidget.Keys.START_DATE] = startDateMillis
+                                        if (endDateMillis == null) {
+                                            remove(CounterWidget.Keys.END_DATE)
+                                        } else {
+                                            this[CounterWidget.Keys.END_DATE] = endDateMillis!!
+                                        }
+                                        this[CounterWidget.Keys.RECORD] = record
+                                        this[CounterWidget.Keys.HISTORY_JSON] = historyArray.toString()
+                                    }
+                                }
+                            }
+                            onUpdateWidget()
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                    }
+                }
+            }
+        }
+
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                onClick = { exportLauncher.launch("conta_dias_backup.json") },
+                modifier = Modifier.weight(1f).height(48.dp)
+            ) { Text("Exportar") }
+            
+            Button(
+                onClick = { importLauncher.launch("application/json") },
+                modifier = Modifier.weight(1f).height(48.dp)
+            ) { Text("Importar") }
         }
 
         Spacer(Modifier.height(8.dp))

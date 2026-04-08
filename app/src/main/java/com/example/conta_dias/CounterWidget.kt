@@ -1,12 +1,23 @@
 package com.example.conta_dias
 
 import android.content.Context
+import android.graphics.BitmapFactory
+import android.net.Uri
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.glance.GlanceId
+import androidx.glance.action.clickable
+import androidx.glance.appwidget.action.actionRunCallback
+import androidx.glance.appwidget.action.ActionCallback
 import androidx.glance.GlanceModifier
+import androidx.glance.Image
+import androidx.glance.ImageProvider
+import androidx.glance.layout.ContentScale
+import androidx.glance.appwidget.updateAll
+import androidx.glance.layout.Box
 import androidx.glance.appwidget.GlanceAppWidget
 import androidx.glance.appwidget.GlanceAppWidgetReceiver
 import androidx.glance.appwidget.provideContent
@@ -40,55 +51,99 @@ class CounterWidget : GlanceAppWidget() {
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         provideContent {
             val prefs = currentState<Preferences>()
-            val startDateMillis = prefs[Keys.START_DATE] ?: System.currentTimeMillis()
-            val endDateMillis = prefs[Keys.END_DATE]
-            val record = prefs[Keys.RECORD] ?: 0L
-            val isPlural = prefs[Keys.IS_PLURAL] ?: false
-            val middleText = prefs[Keys.MIDDLE_TEXT] ?: "Sem acidentes graves"
-            val useMonths = prefs[Keys.USE_MONTHS] ?: false
-            val historyJson = prefs[Keys.HISTORY_JSON] ?: "[]"
+            val showData = prefs[Keys.SHOW_DATA] ?: true
+            val imageUriStr = prefs[Keys.IMAGE_URI]
 
-            // Usamos UTC para converter os millis do Picker para a data correta
-            val startDate = Instant.ofEpochMilli(startDateMillis).atZone(ZoneOffset.UTC).toLocalDate()
-            val today = LocalDate.now()
-            
-            val targetDate = endDateMillis?.let { 
-                Instant.ofEpochMilli(it).atZone(ZoneOffset.UTC).toLocalDate() 
-            } ?: today
-            
-            val rawDiff = if (useMonths) {
-                ChronoUnit.MONTHS.between(startDate, targetDate)
-            } else {
-                ChronoUnit.DAYS.between(startDate, targetDate)
-            }
-            
-            val diff = abs(rawDiff)
-            val currentRecord = if (diff > record) diff else record
-
-            // Cálculo da média do histórico
-            var average = 0L
-            try {
-                val array = JSONArray(historyJson)
-                if (array.length() > 0) {
-                    var sum = 0L
-                    for (i in 0 until array.length()) {
-                        sum += array.getJSONObject(i).getLong("count")
+            val bitmap = remember(imageUriStr) {
+                imageUriStr?.let { uriStr ->
+                    try {
+                        val path = Uri.parse(uriStr).path
+                        if (path != null) {
+                            BitmapFactory.decodeFile(path)
+                        } else null
+                    } catch (e: Exception) {
+                        null
                     }
-                    average = sum / array.length()
                 }
-            } catch (e: Exception) {
-                e.printStackTrace()
             }
-
-            WidgetContent(
-                isPlural = isPlural,
-                count = diff,
-                middleText = middleText,
-                record = currentRecord,
-                average = average,
-                useMonths = useMonths
-            )
+            
+            if (!showData && bitmap != null) {
+                Box(
+                    modifier = GlanceModifier
+                        .fillMaxSize()
+                        .background(Color.Black)
+                        .clickable(actionRunCallback<ToggleDataAction>()),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Image(
+                        provider = ImageProvider(bitmap),
+                        contentDescription = "Background",
+                        modifier = GlanceModifier.fillMaxSize().padding(8.dp),
+                        contentScale = ContentScale.Fit
+                    )
+                }
+            } else {
+                Box(
+                    modifier = GlanceModifier
+                        .fillMaxSize()
+                        .clickable(actionRunCallback<ToggleDataAction>())
+                ) {
+                    DataView(prefs)
+                }
+            }
         }
+    }
+
+    @Composable
+    private fun DataView(prefs: Preferences) {
+        val startDateMillis = prefs[Keys.START_DATE] ?: System.currentTimeMillis()
+        val endDateMillis = prefs[Keys.END_DATE]
+        val record = prefs[Keys.RECORD] ?: 0L
+        val isPlural = prefs[Keys.IS_PLURAL] ?: false
+        val middleText = prefs[Keys.MIDDLE_TEXT] ?: "Sem acidentes graves"
+        val useMonths = prefs[Keys.USE_MONTHS] ?: false
+        val historyJson = prefs[Keys.HISTORY_JSON] ?: "[]"
+
+        // Usamos UTC para converter os millis do Picker para a data correta
+        val startDate = Instant.ofEpochMilli(startDateMillis).atZone(ZoneOffset.UTC).toLocalDate()
+        val today = LocalDate.now()
+        
+        val targetDate = endDateMillis?.let { 
+            Instant.ofEpochMilli(it).atZone(ZoneOffset.UTC).toLocalDate() 
+        } ?: today
+        
+        val rawDiff = if (useMonths) {
+            ChronoUnit.MONTHS.between(startDate, targetDate)
+        } else {
+            ChronoUnit.DAYS.between(startDate, targetDate)
+        }
+        
+        val diff = abs(rawDiff)
+        val currentRecord = if (diff > record) diff else record
+
+        // Cálculo da média do histórico
+        var average = 0L
+        try {
+            val array = JSONArray(historyJson)
+            if (array.length() > 0) {
+                var sum = 0L
+                for (i in 0 until array.length()) {
+                    sum += array.getJSONObject(i).getLong("count")
+                }
+                average = sum / array.length()
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        WidgetContent(
+            isPlural = isPlural,
+            count = diff,
+            middleText = middleText,
+            record = currentRecord,
+            average = average,
+            useMonths = useMonths
+        )
     }
 
     @Composable
@@ -165,6 +220,32 @@ class CounterWidget : GlanceAppWidget() {
         val MIDDLE_TEXT = stringPreferencesKey("middle_text")
         val USE_MONTHS = booleanPreferencesKey("use_months")
         val HISTORY_JSON = stringPreferencesKey("history_json")
+        val SHOW_DATA = booleanPreferencesKey("show_data")
+        val IMAGE_URI = stringPreferencesKey("image_uri")
+        val LAST_CLICK_TIME = longPreferencesKey("last_click_time")
+    }
+}
+
+class ToggleDataAction : ActionCallback {
+    override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: androidx.glance.action.ActionParameters) {
+        androidx.glance.appwidget.state.updateAppWidgetState(context, PreferencesGlanceStateDefinition, glanceId) { prefs ->
+            val now = System.currentTimeMillis()
+            val lastClick = prefs[CounterWidget.Keys.LAST_CLICK_TIME] ?: 0L
+            
+            val mutablePrefs = prefs.toMutablePreferences()
+            
+            if (now - lastClick < 500) {
+                // Duplo toque detectado
+                val current = prefs[CounterWidget.Keys.SHOW_DATA] ?: true
+                mutablePrefs[CounterWidget.Keys.SHOW_DATA] = !current
+                mutablePrefs[CounterWidget.Keys.LAST_CLICK_TIME] = 0L // Reseta para evitar que um 3º clique conte como duplo
+            } else {
+                // Primeiro toque ou toque lento
+                mutablePrefs[CounterWidget.Keys.LAST_CLICK_TIME] = now
+            }
+            mutablePrefs
+        }
+        CounterWidget().update(context, glanceId)
     }
 }
 

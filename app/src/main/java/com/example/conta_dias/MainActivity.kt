@@ -1,5 +1,7 @@
 package com.example.conta_dias
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.os.Bundle
 import android.content.Intent
 import android.net.Uri
@@ -38,6 +40,7 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
+import java.io.File
 import java.io.InputStreamReader
 import java.time.Instant
 import java.time.LocalDate
@@ -350,6 +353,103 @@ fun ConfigurationScreen(
             ) { Text("Importar") }
         }
 
+        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+        Text("Personalização", style = MaterialTheme.typography.titleLarge)
+
+        var imageUri by remember { mutableStateOf<String?>(null) }
+
+        LaunchedEffect(Unit) {
+            val manager = GlanceAppWidgetManager(context)
+            val ids = manager.getGlanceIds(CounterWidget::class.java)
+            if (ids.isNotEmpty()) {
+                val state = getAppWidgetState(context, PreferencesGlanceStateDefinition, ids.first())
+                imageUri = state[CounterWidget.Keys.IMAGE_URI]
+            }
+        }
+
+        val pickImageLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+            uri?.let {
+                scope.launch {
+                    try {
+                        val file = File(context.filesDir, "widget_bg.jpg")
+                        withContext(Dispatchers.IO) {
+                            val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                            context.contentResolver.openInputStream(it)?.use { input ->
+                                BitmapFactory.decodeStream(input, null, options)
+                            }
+                            
+                            var inSampleSize = 1
+                            val targetSize = 1080
+                            if (options.outHeight > targetSize || options.outWidth > targetSize) {
+                                val halfHeight = options.outHeight / 2
+                                val halfWidth = options.outWidth / 2
+                                while (halfHeight / inSampleSize >= targetSize && halfWidth / inSampleSize >= targetSize) {
+                                    inSampleSize *= 2
+                                }
+                            }
+                            
+                            val decodeOptions = BitmapFactory.Options().apply { this.inSampleSize = inSampleSize }
+                            context.contentResolver.openInputStream(it)?.use { input ->
+                                val bitmap = BitmapFactory.decodeStream(input, null, decodeOptions)
+                                bitmap?.let { b ->
+                                    file.outputStream().use { output ->
+                                        b.compress(Bitmap.CompressFormat.JPEG, 85, output)
+                                    }
+                                    b.recycle()
+                                }
+                            }
+                        }
+
+                        val newUriStr = Uri.fromFile(file).toString()
+                        imageUri = newUriStr
+
+                        val manager = GlanceAppWidgetManager(context)
+                        val ids = manager.getGlanceIds(CounterWidget::class.java)
+                        ids.forEach { id ->
+                            updateAppWidgetState(context, PreferencesGlanceStateDefinition, id) { prefs ->
+                                prefs.toMutablePreferences().apply {
+                                    this[CounterWidget.Keys.IMAGE_URI] = newUriStr
+                                    this[CounterWidget.Keys.SHOW_DATA] = false
+                                }
+                            }
+                        }
+                        onUpdateWidget()
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+            }
+        }
+
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Text("Imagem de Fundo:", modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
+            Button(onClick = { pickImageLauncher.launch("image/*") }) {
+                Text(if (imageUri == null) "Escolher" else "Alterar")
+            }
+            if (imageUri != null) {
+                Spacer(Modifier.width(8.dp))
+                Button(onClick = {
+                    imageUri = null
+                    scope.launch {
+                        val manager = GlanceAppWidgetManager(context)
+                        val ids = manager.getGlanceIds(CounterWidget::class.java)
+                        ids.forEach { id ->
+                            updateAppWidgetState(context, PreferencesGlanceStateDefinition, id) { prefs ->
+                                prefs.toMutablePreferences().apply {
+                                    remove(CounterWidget.Keys.IMAGE_URI)
+                                    this[CounterWidget.Keys.SHOW_DATA] = true
+                                }
+                            }
+                        }
+                        onUpdateWidget()
+                    }
+                }, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) {
+                    Text("Limpar")
+                }
+            }
+        }
+
         Spacer(Modifier.height(8.dp))
 
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -381,6 +481,7 @@ fun ConfigurationScreen(
                                     this[CounterWidget.Keys.START_DATE] = todayMillis
                                     this[CounterWidget.Keys.RECORD] = newRecord
                                     this[CounterWidget.Keys.HISTORY_JSON] = historyArray.toString()
+                                    this[CounterWidget.Keys.SHOW_DATA] = true
                                     remove(CounterWidget.Keys.END_DATE)
                                 }
                             }
@@ -420,6 +521,8 @@ fun ConfigurationScreen(
                 shape = MaterialTheme.shapes.medium
             ) { Text("Salvar", fontSize = 18.sp) }
         }
+
+        Spacer(Modifier.height(32.dp))
     }
 }
 

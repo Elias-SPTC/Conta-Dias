@@ -32,9 +32,13 @@ import androidx.glance.text.TextStyle
 import androidx.glance.state.GlanceStateDefinition
 import androidx.glance.state.PreferencesGlanceStateDefinition
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.preferencesDataStoreFile
+import androidx.datastore.core.DataStore
+import java.io.File
 import androidx.glance.currentState
 import androidx.glance.unit.ColorProvider
 import org.json.JSONArray
@@ -46,7 +50,7 @@ import kotlin.math.abs
 
 class CounterWidget : GlanceAppWidget() {
 
-    override val stateDefinition: GlanceStateDefinition<*> = PreferencesGlanceStateDefinition
+    override val stateDefinition: GlanceStateDefinition<*> = GlobalCounterStateDefinition
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         provideContent {
@@ -226,9 +230,17 @@ class CounterWidget : GlanceAppWidget() {
     }
 }
 
+object GlobalCounterStateDefinition : GlanceStateDefinition<Preferences> {
+    override fun getLocation(context: Context, fileKey: String): File =
+        context.preferencesDataStoreFile("global_counter_stats")
+
+    override suspend fun getDataStore(context: Context, fileKey: String): DataStore<Preferences> =
+        context.dataStore
+}
+
 class ToggleDataAction : ActionCallback {
     override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: androidx.glance.action.ActionParameters) {
-        androidx.glance.appwidget.state.updateAppWidgetState(context, PreferencesGlanceStateDefinition, glanceId) { prefs ->
+        androidx.glance.appwidget.state.updateAppWidgetState(context, GlobalCounterStateDefinition, glanceId) { prefs ->
             val now = System.currentTimeMillis()
             val lastClick = prefs[CounterWidget.Keys.LAST_CLICK_TIME] ?: 0L
             
@@ -245,7 +257,7 @@ class ToggleDataAction : ActionCallback {
             }
             mutablePrefs
         }
-        CounterWidget().update(context, glanceId)
+        CounterWidget().updateAll(context)
     }
 }
 

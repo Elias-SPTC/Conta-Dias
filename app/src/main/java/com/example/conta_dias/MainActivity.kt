@@ -29,8 +29,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.glance.appwidget.GlanceAppWidgetManager
 import androidx.glance.appwidget.state.getAppWidgetState
+import androidx.glance.appwidget.updateAll
 import androidx.glance.appwidget.state.updateAppWidgetState
-import androidx.glance.state.PreferencesGlanceStateDefinition
+import androidx.glance.state.GlanceStateDefinition
+import androidx.datastore.preferences.core.edit
+import kotlinx.coroutines.flow.first
 import androidx.lifecycle.lifecycleScope
 import com.example.conta_dias.ui.theme.ContaDiasTheme
 import kotlinx.coroutines.Dispatchers
@@ -66,7 +69,10 @@ class MainActivity : ComponentActivity() {
                 var currentScreen by remember { mutableStateOf("config") }
                 
                 if (currentScreen == "history") {
-                    HistoryScreen(onBack = { currentScreen = "config" })
+                    HistoryScreen(
+                        onBack = { currentScreen = "config" },
+                        onUpdateWidget = { updateWidgets() }
+                    )
                 } else {
                     Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                         ConfigurationScreen(
@@ -82,11 +88,7 @@ class MainActivity : ComponentActivity() {
 
     private fun updateWidgets() {
         lifecycleScope.launch {
-            val manager = GlanceAppWidgetManager(this@MainActivity)
-            val ids = manager.getGlanceIds(CounterWidget::class.java)
-            ids.forEach { id ->
-                CounterWidget().update(this@MainActivity, id)
-            }
+            CounterWidget().updateAll(this@MainActivity)
         }
     }
 }
@@ -117,26 +119,22 @@ fun ConfigurationScreen(
     val endDatePickerState = rememberDatePickerState(initialSelectedDateMillis = endDateMillis ?: todayMillis)
 
     LaunchedEffect(Unit) {
-        val manager = GlanceAppWidgetManager(context)
-        val ids = manager.getGlanceIds(CounterWidget::class.java)
-        if (ids.isNotEmpty()) {
-            val state = getAppWidgetState(context, PreferencesGlanceStateDefinition, ids.first())
-            isPlural = state[CounterWidget.Keys.IS_PLURAL] ?: false
-            middleText = state[CounterWidget.Keys.MIDDLE_TEXT] ?: "Sem acidentes graves"
-            useMonths = state[CounterWidget.Keys.USE_MONTHS] ?: false
-            startDateMillis = state[CounterWidget.Keys.START_DATE] ?: todayMillis
-            endDateMillis = state[CounterWidget.Keys.END_DATE]
-            val savedRecord = state[CounterWidget.Keys.RECORD] ?: 0L
-            
-            // Calcula se a contagem atual supera o recorde salvo para exibição
-            val s = Instant.ofEpochMilli(startDateMillis).atZone(ZoneOffset.UTC).toLocalDate()
-            val today = LocalDate.now()
-            val liveDiff = abs(if (useMonths) ChronoUnit.MONTHS.between(s, today) else ChronoUnit.DAYS.between(s, today))
-            record = if (liveDiff > savedRecord && endDateMillis == null) liveDiff else savedRecord
-            
-            startDatePickerState.selectedDateMillis = startDateMillis
-            endDatePickerState.selectedDateMillis = endDateMillis ?: todayMillis
-        }
+        val state = context.dataStore.data.first()
+        isPlural = state[CounterWidget.Keys.IS_PLURAL] ?: false
+        middleText = state[CounterWidget.Keys.MIDDLE_TEXT] ?: "Sem acidentes graves"
+        useMonths = state[CounterWidget.Keys.USE_MONTHS] ?: false
+        startDateMillis = state[CounterWidget.Keys.START_DATE] ?: todayMillis
+        endDateMillis = state[CounterWidget.Keys.END_DATE]
+        val savedRecord = state[CounterWidget.Keys.RECORD] ?: 0L
+        
+        // Calcula se a contagem atual supera o recorde salvo para exibição
+        val s = Instant.ofEpochMilli(startDateMillis).atZone(ZoneOffset.UTC).toLocalDate()
+        val today = LocalDate.now()
+        val liveDiff = abs(if (useMonths) ChronoUnit.MONTHS.between(s, today) else ChronoUnit.DAYS.between(s, today))
+        record = if (liveDiff > savedRecord && endDateMillis == null) liveDiff else savedRecord
+        
+        startDatePickerState.selectedDateMillis = startDateMillis
+        endDatePickerState.selectedDateMillis = endDateMillis ?: todayMillis
     }
 
     if (showStartDatePicker) {
@@ -272,14 +270,10 @@ fun ConfigurationScreen(
                         put("endDate", endDateMillis ?: JSONObject.NULL)
                         put("record", record)
                         
-                        // Pegar o histórico atual do GlanceState
-                        val manager = GlanceAppWidgetManager(context)
-                        val ids = manager.getGlanceIds(CounterWidget::class.java)
-                        if (ids.isNotEmpty()) {
-                            val state = getAppWidgetState(context, PreferencesGlanceStateDefinition, ids.first())
-                            val historyJson = state[CounterWidget.Keys.HISTORY_JSON] ?: "[]"
-                            put("history", JSONArray(historyJson))
-                        }
+                        // Pegar o histórico atual
+                        val state = context.dataStore.data.first()
+                        val historyJson = state[CounterWidget.Keys.HISTORY_JSON] ?: "[]"
+                        put("history", JSONArray(historyJson))
                     }
                     
                     withContext(Dispatchers.IO) {
@@ -312,25 +306,19 @@ fun ConfigurationScreen(
                             
                             val historyArray = json.optJSONArray("history") ?: JSONArray()
                             
-                            // Atualizar widgets
-                            val manager = GlanceAppWidgetManager(context)
-                            val ids = manager.getGlanceIds(CounterWidget::class.java)
-                            ids.forEach { id ->
-                                updateAppWidgetState(context, PreferencesGlanceStateDefinition, id) { prefs ->
-                                    prefs.toMutablePreferences().apply {
-                                        this[CounterWidget.Keys.IS_PLURAL] = isPlural
-                                        this[CounterWidget.Keys.MIDDLE_TEXT] = middleText
-                                        this[CounterWidget.Keys.USE_MONTHS] = useMonths
-                                        this[CounterWidget.Keys.START_DATE] = startDateMillis
-                                        if (endDateMillis == null) {
-                                            remove(CounterWidget.Keys.END_DATE)
-                                        } else {
-                                            this[CounterWidget.Keys.END_DATE] = endDateMillis!!
-                                        }
-                                        this[CounterWidget.Keys.RECORD] = record
-                                        this[CounterWidget.Keys.HISTORY_JSON] = historyArray.toString()
-                                    }
+                            // Atualizar dados globais
+                            context.dataStore.edit { prefs ->
+                                prefs[CounterWidget.Keys.IS_PLURAL] = isPlural
+                                prefs[CounterWidget.Keys.MIDDLE_TEXT] = middleText
+                                prefs[CounterWidget.Keys.USE_MONTHS] = useMonths
+                                prefs[CounterWidget.Keys.START_DATE] = startDateMillis
+                                if (endDateMillis == null) {
+                                    prefs.remove(CounterWidget.Keys.END_DATE)
+                                } else {
+                                    prefs[CounterWidget.Keys.END_DATE] = endDateMillis!!
                                 }
+                                prefs[CounterWidget.Keys.RECORD] = record
+                                prefs[CounterWidget.Keys.HISTORY_JSON] = historyArray.toString()
                             }
                             onUpdateWidget()
                         } catch (e: Exception) {
@@ -360,12 +348,8 @@ fun ConfigurationScreen(
         var imageUri by remember { mutableStateOf<String?>(null) }
 
         LaunchedEffect(Unit) {
-            val manager = GlanceAppWidgetManager(context)
-            val ids = manager.getGlanceIds(CounterWidget::class.java)
-            if (ids.isNotEmpty()) {
-                val state = getAppWidgetState(context, PreferencesGlanceStateDefinition, ids.first())
-                imageUri = state[CounterWidget.Keys.IMAGE_URI]
-            }
+            val state = context.dataStore.data.first()
+            imageUri = state[CounterWidget.Keys.IMAGE_URI]
         }
 
         val pickImageLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -404,15 +388,9 @@ fun ConfigurationScreen(
                         val newUriStr = Uri.fromFile(file).toString()
                         imageUri = newUriStr
 
-                        val manager = GlanceAppWidgetManager(context)
-                        val ids = manager.getGlanceIds(CounterWidget::class.java)
-                        ids.forEach { id ->
-                            updateAppWidgetState(context, PreferencesGlanceStateDefinition, id) { prefs ->
-                                prefs.toMutablePreferences().apply {
-                                    this[CounterWidget.Keys.IMAGE_URI] = newUriStr
-                                    this[CounterWidget.Keys.SHOW_DATA] = false
-                                }
-                            }
+                        context.dataStore.edit { prefs ->
+                            prefs[CounterWidget.Keys.IMAGE_URI] = newUriStr
+                            prefs[CounterWidget.Keys.SHOW_DATA] = false
                         }
                         onUpdateWidget()
                     } catch (e: Exception) {
@@ -432,15 +410,9 @@ fun ConfigurationScreen(
                 Button(onClick = {
                     imageUri = null
                     scope.launch {
-                        val manager = GlanceAppWidgetManager(context)
-                        val ids = manager.getGlanceIds(CounterWidget::class.java)
-                        ids.forEach { id ->
-                            updateAppWidgetState(context, PreferencesGlanceStateDefinition, id) { prefs ->
-                                prefs.toMutablePreferences().apply {
-                                    remove(CounterWidget.Keys.IMAGE_URI)
-                                    this[CounterWidget.Keys.SHOW_DATA] = true
-                                }
-                            }
+                        context.dataStore.edit { prefs ->
+                            prefs.remove(CounterWidget.Keys.IMAGE_URI)
+                            prefs[CounterWidget.Keys.SHOW_DATA] = true
                         }
                         onUpdateWidget()
                     }
@@ -456,35 +428,28 @@ fun ConfigurationScreen(
             Button(
                 onClick = {
                     scope.launch {
-                        val manager = GlanceAppWidgetManager(context)
-                        val ids = manager.getGlanceIds(CounterWidget::class.java)
-                        
                         val s = Instant.ofEpochMilli(startDateMillis).atZone(ZoneOffset.UTC).toLocalDate()
                         val today = LocalDate.now()
                         val diff = if (useMonths) ChronoUnit.MONTHS.between(s, today) else ChronoUnit.DAYS.between(s, today)
                         val finalCount = abs(diff)
 
-                        ids.forEach { id ->
-                            updateAppWidgetState(context, PreferencesGlanceStateDefinition, id) { prefs ->
-                                val currentHistoryJson = prefs[CounterWidget.Keys.HISTORY_JSON] ?: "[]"
-                                val historyArray = JSONArray(currentHistoryJson)
-                                historyArray.put(JSONObject().apply {
-                                    put("id", UUID.randomUUID().toString())
-                                    put("start", startDateMillis)
-                                    put("end", todayMillis)
-                                    put("count", finalCount)
-                                })
-                                
-                                val newRecord = if (finalCount > record) finalCount else record
-                                
-                                prefs.toMutablePreferences().apply {
-                                    this[CounterWidget.Keys.START_DATE] = todayMillis
-                                    this[CounterWidget.Keys.RECORD] = newRecord
-                                    this[CounterWidget.Keys.HISTORY_JSON] = historyArray.toString()
-                                    this[CounterWidget.Keys.SHOW_DATA] = true
-                                    remove(CounterWidget.Keys.END_DATE)
-                                }
-                            }
+                        context.dataStore.edit { prefs ->
+                            val currentHistoryJson = prefs[CounterWidget.Keys.HISTORY_JSON] ?: "[]"
+                            val historyArray = JSONArray(currentHistoryJson)
+                            historyArray.put(JSONObject().apply {
+                                put("id", UUID.randomUUID().toString())
+                                put("start", startDateMillis)
+                                put("end", todayMillis)
+                                put("count", finalCount)
+                            })
+                            
+                            val newRecord = if (finalCount > record) finalCount else record
+                            
+                            prefs[CounterWidget.Keys.START_DATE] = todayMillis
+                            prefs[CounterWidget.Keys.RECORD] = newRecord
+                            prefs[CounterWidget.Keys.HISTORY_JSON] = historyArray.toString()
+                            prefs[CounterWidget.Keys.SHOW_DATA] = true
+                            prefs.remove(CounterWidget.Keys.END_DATE)
                         }
                         startDateMillis = todayMillis
                         endDateMillis = null
@@ -500,19 +465,13 @@ fun ConfigurationScreen(
             Button(
                 onClick = {
                     scope.launch {
-                        val manager = GlanceAppWidgetManager(context)
-                        val ids = manager.getGlanceIds(CounterWidget::class.java)
-                        ids.forEach { id ->
-                            updateAppWidgetState(context, PreferencesGlanceStateDefinition, id) { prefs ->
-                                prefs.toMutablePreferences().apply {
-                                    this[CounterWidget.Keys.IS_PLURAL] = isPlural
-                                    this[CounterWidget.Keys.MIDDLE_TEXT] = middleText
-                                    this[CounterWidget.Keys.USE_MONTHS] = useMonths
-                                    this[CounterWidget.Keys.START_DATE] = startDateMillis
-                                    if (endDateMillis != null) this[CounterWidget.Keys.END_DATE] = endDateMillis!! else remove(CounterWidget.Keys.END_DATE)
-                                    this[CounterWidget.Keys.RECORD] = record
-                                }
-                            }
+                        context.dataStore.edit { prefs ->
+                            prefs[CounterWidget.Keys.IS_PLURAL] = isPlural
+                            prefs[CounterWidget.Keys.MIDDLE_TEXT] = middleText
+                            prefs[CounterWidget.Keys.USE_MONTHS] = useMonths
+                            prefs[CounterWidget.Keys.START_DATE] = startDateMillis
+                            if (endDateMillis != null) prefs[CounterWidget.Keys.END_DATE] = endDateMillis!! else prefs.remove(CounterWidget.Keys.END_DATE)
+                            prefs[CounterWidget.Keys.RECORD] = record
                         }
                         onUpdateWidget()
                     }
@@ -528,7 +487,7 @@ fun ConfigurationScreen(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HistoryScreen(onBack: () -> Unit) {
+fun HistoryScreen(onBack: () -> Unit, onUpdateWidget: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var historyItems by remember { mutableStateOf(listOf<HistoryItem>()) }
@@ -541,32 +500,26 @@ fun HistoryScreen(onBack: () -> Unit) {
     BackHandler { onBack() }
 
     LaunchedEffect(Unit) {
-        val manager = GlanceAppWidgetManager(context)
-        val ids = manager.getGlanceIds(CounterWidget::class.java)
-        if (ids.isNotEmpty()) {
-            val state = getAppWidgetState(context, PreferencesGlanceStateDefinition, ids.first())
-            val json = state[CounterWidget.Keys.HISTORY_JSON] ?: "[]"
-            useMonths = state[CounterWidget.Keys.USE_MONTHS] ?: false
-            val list = mutableListOf<HistoryItem>()
-            val array = JSONArray(json)
-            for (i in 0 until array.length()) {
-                val obj = array.getJSONObject(i)
-                list.add(HistoryItem(
-                    obj.getString("id"),
-                    obj.getLong("start"),
-                    obj.getLong("end"),
-                    obj.getLong("count")
-                ))
-            }
-            historyItems = list
+        val state = context.dataStore.data.first()
+        val json = state[CounterWidget.Keys.HISTORY_JSON] ?: "[]"
+        useMonths = state[CounterWidget.Keys.USE_MONTHS] ?: false
+        val list = mutableListOf<HistoryItem>()
+        val array = JSONArray(json)
+        for (i in 0 until array.length()) {
+            val obj = array.getJSONObject(i)
+            list.add(HistoryItem(
+                obj.getString("id"),
+                obj.getLong("start"),
+                obj.getLong("end"),
+                obj.getLong("count")
+            ))
         }
+        historyItems = list
         isLoading = false
     }
 
     fun saveHistory(newList: List<HistoryItem>) {
         scope.launch {
-            val manager = GlanceAppWidgetManager(context)
-            val ids = manager.getGlanceIds(CounterWidget::class.java)
             val jsonArray = JSONArray()
             newList.forEach { item ->
                 jsonArray.put(JSONObject().apply {
@@ -580,18 +533,15 @@ fun HistoryScreen(onBack: () -> Unit) {
             
             val maxHistory = if (newList.isEmpty()) 0L else newList.maxOf { it.count }
 
-            ids.forEach { id ->
-                updateAppWidgetState(context, PreferencesGlanceStateDefinition, id) { prefs ->
-                    prefs.toMutablePreferences().apply {
-                        this[CounterWidget.Keys.HISTORY_JSON] = jsonString
-                        val currentRecord = this[CounterWidget.Keys.RECORD] ?: 0L
-                        if (maxHistory > currentRecord) {
-                            this[CounterWidget.Keys.RECORD] = maxHistory
-                        }
-                    }
+            context.dataStore.edit { prefs ->
+                prefs[CounterWidget.Keys.HISTORY_JSON] = jsonString
+                val currentRecord = prefs[CounterWidget.Keys.RECORD] ?: 0L
+                if (maxHistory > currentRecord) {
+                    prefs[CounterWidget.Keys.RECORD] = maxHistory
                 }
-                CounterWidget().update(context, id)
             }
+            
+            onUpdateWidget()
             historyItems = newList
         }
     }
